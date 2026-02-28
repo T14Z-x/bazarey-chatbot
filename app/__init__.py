@@ -1,0 +1,1 @@
+"""Bazarey local bot package."""
