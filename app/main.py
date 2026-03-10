@@ -46,257 +46,486 @@ def utc_now_iso() -> str:
 def dashboard_html() -> str:
     return """
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bazarey Local Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --bg0: #fef9ef;
-      --bg1: #f8e6c4;
-      --card: #fffdf8;
-      --ink: #202125;
-      --muted: #6a6f76;
+    :root[data-theme="light"] {
+      --bg-gradient: linear-gradient(135deg, #fef9ef 0%, #f8e6c4 100%);
+      --glass-bg: rgba(255, 255, 255, 0.85);
+      --glass-border: rgba(233, 220, 197, 0.8);
+      --text-main: #202125;
+      --text-muted: #6a6f76;
       --accent: #0b8d8c;
+      --accent-hover: #097574;
       --accent2: #eb5e28;
-      --line: #e9dcc5;
-      --ok: #107a42;
-      --warn: #af5b00;
-      --err: #b30f2f;
-      --font-head: "Avenir Next", "Futura", "Trebuchet MS", sans-serif;
-      --font-body: "Gill Sans", "Segoe UI", sans-serif;
-      --font-mono: "Courier Prime", "Menlo", monospace;
+      --input-bg: #ffffff;
+      --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+      --chat-me: #e8f4fb;
+      --chat-bot: #fff5df;
+      --code-bg: #fffdf8;
+    }
+
+    :root[data-theme="dark"] {
+      --bg-gradient: linear-gradient(135deg, #121212 0%, #1e1e1e 100%);
+      --glass-bg: rgba(30, 30, 30, 0.85);
+      --glass-border: rgba(60, 60, 60, 0.5);
+      --text-main: #e0e0e0;
+      --text-muted: #a0a0a0;
+      --accent: #14b8b8;
+      --accent-hover: #109696;
+      --accent2: #ff7e4d;
+      --input-bg: #2a2a2a;
+      --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      --chat-me: #1e3a5f;
+      --chat-bot: #4d3d20;
+      --code-bg: #1a1a1a;
     }
 
     * { box-sizing: border-box; }
+    
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: var(--font-body);
-      color: var(--ink);
-      background:
-        radial-gradient(1200px 500px at 110% -10%, rgba(11,141,140,.2), transparent 55%),
-        radial-gradient(900px 420px at -10% 110%, rgba(235,94,40,.16), transparent 52%),
-        linear-gradient(135deg, var(--bg0), var(--bg1));
-      display: grid;
-      place-items: center;
+      font-family: 'Inter', 'Hind Siliguri', sans-serif;
+      color: var(--text-main);
+      background: var(--bg-gradient);
+      background-attachment: fixed;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
       padding: 24px;
+      transition: background 0.3s ease, color 0.3s ease;
+    }
+
+    .top-controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding: 8px 16px;
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      border-radius: 40px;
+      backdrop-filter: blur(8px);
+      box-shadow: var(--card-shadow);
+    }
+
+    .control-btn {
+      background: none;
+      border: 1px solid var(--glass-border);
+      color: var(--text-main);
+      padding: 6px 14px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 0.85rem;
+      transition: all 0.2s ease;
+    }
+
+    .control-btn:hover {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .control-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
     }
 
     .shell {
-      width: min(1160px, 100%);
+      width: min(1200px, 100%);
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 18px;
-      animation: rise .28s ease-out;
+      gap: 24px;
+      animation: rise 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     }
+
     @keyframes rise {
-      from { opacity: 0; transform: translateY(8px); }
+      from { opacity: 0; transform: translateY(20px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
     .card {
-      background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(255,253,248,.9));
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      box-shadow: 0 8px 28px rgba(0,0,0,.08);
-      padding: 18px;
-      backdrop-filter: blur(4px);
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      border-radius: 24px;
+      box-shadow: var(--card-shadow);
+      padding: 28px;
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
     }
 
     h1 {
-      margin: 0 0 14px;
-      font-family: var(--font-head);
-      letter-spacing: .2px;
-      font-size: clamp(1.3rem, 2vw, 1.8rem);
-      line-height: 1.15;
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
     }
-    h2 {
-      margin: 0 0 10px;
-      font-family: var(--font-head);
-      font-size: 1.05rem;
-    }
-    .muted { color: var(--muted); font-size: .93rem; }
 
-    .grid2 {
+    .muted { 
+      color: var(--text-muted); 
+      font-size: 0.95rem; 
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+
+    .form-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 10px;
+      gap: 16px;
+      margin-bottom: 20px;
     }
-    label { font-size: .84rem; color: var(--muted); display: block; margin-bottom: 5px; }
-    input, textarea {
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label { 
+      font-size: 0.85rem; 
+      font-weight: 600;
+      color: var(--text-muted); 
+    }
+
+    input, textarea, select {
       width: 100%;
-      border: 1px solid #dccfb5;
-      border-radius: 10px;
-      padding: 10px 11px;
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 12px 14px;
       font: inherit;
-      background: #fffefb;
-      color: var(--ink);
+      background: var(--input-bg);
+      color: var(--text-main);
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
-    textarea { resize: vertical; min-height: 72px; }
+
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(11, 141, 140, 0.15);
+    }
+
+    textarea { resize: vertical; min-height: 80px; }
 
     .actions {
-      margin-top: 10px;
       display: flex;
-      gap: 8px;
+      gap: 12px;
+      margin-bottom: 20px;
       flex-wrap: wrap;
     }
-    button {
-      border: 0;
-      border-radius: 11px;
-      padding: 10px 13px;
-      font: 600 .9rem var(--font-head);
-      cursor: pointer;
-      transition: transform .08s ease, opacity .12s ease;
-    }
-    button:active { transform: translateY(1px); }
-    .btn-primary { background: var(--accent); color: #fff; }
-    .btn-secondary { background: #212121; color: #fff; }
-    .btn-warm { background: var(--accent2); color: #fff; }
 
-    .badge {
-      display: inline-block;
-      margin: 6px 0 10px;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font: 600 .8rem var(--font-mono);
-      background: #fff5dc;
-      border: 1px solid #f4d89b;
-      color: var(--warn);
+    button.main {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 20px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
-    .badge.ok { background: #edf9f2; border-color: #cfe9da; color: var(--ok); }
-    .badge.err { background: #fff1f4; border-color: #efc7d1; color: var(--err); }
+
+    button.main:active { transform: scale(0.97); }
+
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-hover); }
+
+    .btn-secondary { background: var(--glass-border); color: var(--text-main); }
+    .btn-secondary:hover { background: rgba(0,0,0,0.1); }
+
+    .btn-warm { background: var(--accent2); color: white; }
+    .btn-warm:hover { opacity: 0.9; }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+      background: rgba(0,0,0,0.05);
+    }
+
+    .status-badge.ok { background: rgba(16, 122, 66, 0.15); color: #107a42; }
+    .status-badge.err { background: rgba(179, 15, 47, 0.15); color: #b30f2f; }
+    .status-badge.running { background: rgba(11, 141, 140, 0.15); color: var(--accent); }
 
     .chat-box {
-      margin-top: 10px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: #fffefb;
-      height: 360px;
-      overflow: auto;
-      padding: 10px;
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
+      background: var(--input-bg);
+      height: 400px;
+      overflow-y: auto;
+      padding: 16px;
+      margin-bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scroll-behavior: smooth;
     }
+
     .msg {
-      margin: 0 0 8px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      width: fit-content;
-      max-width: 92%;
-      white-space: pre-wrap;
-      line-height: 1.4;
+      padding: 12px 16px;
+      border-radius: 18px;
+      max-width: 85%;
+      line-height: 1.5;
+      font-size: 0.95rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.02);
     }
-    .me { margin-left: auto; background: #e8f4fb; border: 1px solid #cce4f3; }
-    .bot { background: #fff5df; border: 1px solid #f0dfb7; }
+
+    .msg.me {
+      align-self: flex-end;
+      background: var(--chat-me);
+      border-bottom-right-radius: 4px;
+      border: 1px solid rgba(0,0,0,0.05);
+    }
+
+    .msg.bot {
+      align-self: flex-start;
+      background: var(--chat-bot);
+      border-bottom-left-radius: 4px;
+      border: 1px solid rgba(0,0,0,0.05);
+    }
 
     pre {
-      margin: 6px 0 0;
-      border: 1px dashed #dbcbb0;
-      border-radius: 8px;
-      background: #fffdf8;
-      padding: 10px;
-      font: .8rem var(--font-mono);
+      margin: 0;
+      background: var(--code-bg);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 0.8rem;
+      font-family: 'Menlo', 'Courier New', monospace;
       overflow-x: auto;
+      color: var(--text-main);
+    }
+
+    .footer {
+      margin-top: 40px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
     }
 
     @media (max-width: 960px) {
       .shell { grid-template-columns: 1fr; }
-      .chat-box { height: 300px; }
+      body { padding: 16px; }
     }
   </style>
 </head>
 <body>
+  <div class="top-controls">
+    <button class="control-btn" id="themeToggle">🌓 Theme</button>
+    <div style="width: 1px; background: var(--glass-border); margin: 4px 0;"></div>
+    <button class="control-btn" onclick="setLang('en')" id="langEn">English</button>
+    <button class="control-btn" onclick="setLang('bn')" id="langBn">বাংলা</button>
+  </div>
+
   <div class="shell">
+    <!-- Scraper Section -->
     <section class="card">
-      <h1>Bazarey Scraper Console</h1>
-      <p class="muted">Run catalog scrape into <code>data/products.xlsx</code> with live status.</p>
-      <div class="grid2">
-        <div>
-          <label for="headless">Headless</label>
-          <input id="headless" value="true" />
+      <h1 data-t="scraperTitle">Scraper Console</h1>
+      <p class="muted" data-t="scraperDesc">Run catalog scrape into data/products.xlsx with live status.</p>
+      
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="headless" data-t="labelHeadless">Headless</label>
+          <select id="headless">
+            <option value="true">True</option>
+            <option value="false">False</option>
+          </select>
         </div>
-        <div>
-          <label for="limit">Limit (0 = all)</label>
+        <div class="form-group">
+          <label for="limit" data-t="labelLimit">Limit (0 = all)</label>
           <input id="limit" type="number" value="0" min="0" />
         </div>
-        <div>
-          <label for="slowmo">Slowmo (ms)</label>
+        <div class="form-group">
+          <label for="slowmo" data-t="labelSlowmo">Slowmo (ms)</label>
           <input id="slowmo" type="number" value="0" min="0" />
         </div>
-        <div>
-          <label for="output">Output path (optional)</label>
-          <input id="output" value="" placeholder="data/products.xlsx" />
+        <div class="form-group">
+          <label for="output" data-t="labelOutput">Output Path</label>
+          <input id="output" placeholder="data/products.xlsx" />
         </div>
       </div>
+
       <div class="actions">
-        <button class="btn-primary" id="startScrapeBtn">Start Scrape</button>
-        <button class="btn-secondary" id="refreshStatusBtn">Refresh Status</button>
+        <button class="main btn-primary" id="startScrapeBtn">
+          <span data-t="btnStartScrape">Start Scrape</span>
+        </button>
+        <button class="main btn-secondary" id="refreshStatusBtn">
+          <span data-t="btnRefresh">Refresh</span>
+        </button>
       </div>
-      <div id="scrapeBadge" class="badge">Idle</div>
-      <pre id="scrapeStatus">No scrape started yet.</pre>
+
+      <div class="status-badge" id="scrapeBadge">
+        <span id="badgeIcon">●</span> <span id="badgeText" data-t="statusIdle">Idle</span>
+      </div>
+      
+      <pre id="scrapeStatus">{}</pre>
     </section>
 
+    <!-- Chat Section -->
     <section class="card">
-      <h1>Chat Simulator</h1>
-      <p class="muted">Local order assistant using Ollama + products.xlsx pricing.</p>
-      <div class="grid2">
-        <div>
-          <label for="userId">Channel User ID</label>
+      <h1 data-t="chatTitle">Chat Simulator</h1>
+      <p class="muted" data-t="chatDesc">Local order assistant using LLM + catalog pricing.</p>
+      
+      <div class="form-grid">
+        <div class="form-group" style="grid-column: span 2;">
+          <label for="userId" data-t="labelUserId">User ID</label>
           <input id="userId" value="u123" />
         </div>
-        <div>
-          <label for="quickMsg">Quick Prompt</label>
-          <input id="quickMsg" value="miniket rice 5kg price?" />
-        </div>
       </div>
-      <div class="actions">
-        <button class="btn-warm" id="sendQuickBtn">Send Quick Prompt</button>
-        <button class="btn-secondary" id="clearChatBtn">Clear Chat</button>
-      </div>
+
       <div class="chat-box" id="chatBox"></div>
-      <label for="chatInput">Message</label>
-      <textarea id="chatInput" placeholder="Type message..."></textarea>
+      
+      <div class="form-group" style="margin-bottom: 12px;">
+        <textarea id="chatInput" placeholder="Type a message..."></textarea>
+      </div>
+
       <div class="actions">
-        <button class="btn-primary" id="sendBtn">Send</button>
+        <button class="main btn-primary" id="sendBtn" style="flex: 1; justify-content: center;">
+          <span data-t="btnSend">Send</span>
+        </button>
+        <button class="main btn-secondary" id="clearChatBtn" data-t="btnClear">
+          Clear
+        </button>
       </div>
     </section>
   </div>
 
+  <div class="footer">
+    Bazarey Bot v1.0 • Built with FastAPI & Playwright
+  </div>
+
   <script>
+    const i18n = {
+      en: {
+        scraperTitle: "Scraper Console",
+        scraperDesc: "Run catalog scrape into data/products.xlsx with live status.",
+        labelHeadless: "Headless",
+        labelLimit: "Limit (0 = all)",
+        labelSlowmo: "Slowmo (ms)",
+        labelOutput: "Output Path",
+        btnStartScrape: "Start Scrape",
+        btnRefresh: "Refresh Status",
+        statusIdle: "Idle",
+        statusRunning: "Running",
+        statusDone: "Done",
+        statusFailed: "Failed",
+        chatTitle: "Chat Simulator",
+        chatDesc: "Local order assistant using LLM + catalog pricing.",
+        labelUserId: "Channel User ID",
+        btnSend: "Send Message",
+        btnClear: "Clear Chat",
+        placeholder: "Type message...",
+        noReply: "No reply from bot"
+      },
+      bn: {
+        scraperTitle: "স্ক্র্যাপার কনসোল",
+        scraperDesc: "লাইভ স্ট্যাটাস সহ data/products.xlsx- এ ক্যাটালগ স্ক্র্যাপ চালান।",
+        labelHeadless: "হেডলেস",
+        labelLimit: "সীমা (০ = সব)",
+        labelSlowmo: "স্লোমো (মি.সে.)",
+        labelOutput: "আউটপুট পাথ",
+        btnStartScrape: "স্ক্র্যাপ শুরু করুন",
+        btnRefresh: "স্ট্যাটাস রিফ্রেশ",
+        statusIdle: "অলস",
+        statusRunning: "চলছে",
+        statusDone: "সম্পন্ন",
+        statusFailed: "ব্যর্থ",
+        chatTitle: "চ্যাট সিমুলেটর",
+        chatDesc: "LLM + ক্যাটালগ প্রাক্কলন ব্যবহার করে লোকাল সহকারী।",
+        labelUserId: "চ্যানেল ইউজার আইডি",
+        btnSend: "বার্তা পাঠান",
+        btnClear: "পরিষ্কার করুন",
+        placeholder: "বার্তা লিখুন...",
+        noReply: "বট থেকে কোন উত্তর নেই"
+      }
+    };
+
+    let currentLang = localStorage.getItem('bazarey_lang') || 'en';
+    let currentTheme = localStorage.getItem('bazarey_theme') || 'light';
+
+    function updateLanguageUI() {
+      const texts = i18n[currentLang];
+      document.querySelectorAll('[data-t]').forEach(el => {
+        const key = el.getAttribute('data-t');
+        if (texts[key]) el.textContent = texts[key];
+      });
+      document.getElementById('chatInput').placeholder = texts.placeholder;
+      document.getElementById('langEn').classList.toggle('active', currentLang === 'en');
+      document.getElementById('langBn').classList.toggle('active', currentLang === 'bn');
+      document.documentElement.lang = currentLang;
+    }
+
+    function setLang(lang) {
+      currentLang = lang;
+      localStorage.setItem('bazarey_lang', lang);
+      updateLanguageUI();
+    }
+
+    function toggleTheme() {
+      currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', currentTheme);
+      localStorage.setItem('bazarey_theme', currentTheme);
+    }
+
+    document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    updateLanguageUI();
+
     const scrapeStatusEl = document.getElementById("scrapeStatus");
     const scrapeBadgeEl = document.getElementById("scrapeBadge");
+    const badgeTextEl = document.getElementById("badgeText");
     const chatBoxEl = document.getElementById("chatBox");
 
-    function setBadge(kind, text) {
-      scrapeBadgeEl.className = "badge" + (kind ? " " + kind : "");
-      scrapeBadgeEl.textContent = text;
+    function setBadge(kind, statusKey) {
+      scrapeBadgeEl.className = "status-badge" + (kind ? " " + kind : "");
+      badgeTextEl.setAttribute('data-t', statusKey);
+      badgeTextEl.textContent = i18n[currentLang][statusKey];
     }
 
     function addMsg(kind, text) {
-      const p = document.createElement("p");
-      p.className = "msg " + kind;
-      p.textContent = text;
-      chatBoxEl.appendChild(p);
+      const div = document.createElement("div");
+      div.className = "msg " + kind;
+      div.textContent = text;
+      chatBoxEl.appendChild(div);
       chatBoxEl.scrollTop = chatBoxEl.scrollHeight;
     }
 
     async function refreshStatus() {
-      const res = await fetch("/simulate/scrape/status");
-      const data = await res.json();
-      scrapeStatusEl.textContent = JSON.stringify(data, null, 2);
-      if (data.running) {
-        setBadge("", "Running");
-      } else if (data.last_error) {
-        setBadge("err", "Failed");
-      } else if (data.last_result_total !== null) {
-        setBadge("ok", "Done");
-      } else {
-        setBadge("", "Idle");
-      }
+      try {
+        const res = await fetch("/simulate/scrape/status");
+        const data = await res.json();
+        if (JSON.stringify(data) !== scrapeStatusEl.textContent) {
+            scrapeStatusEl.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        if (data.running) {
+          setBadge("running", "statusRunning");
+        } else if (data.last_error) {
+          setBadge("err", "statusFailed");
+        } else if (data.last_result_total !== null) {
+          setBadge("ok", "statusDone");
+        } else {
+          setBadge("", "statusIdle");
+        }
+      } catch (e) {}
     }
 
     async function startScrape() {
-      const headless = (document.getElementById("headless").value || "true").toLowerCase() === "true";
+      const headless = document.getElementById("headless").value === "true";
       const limit = Number(document.getElementById("limit").value || 0);
       const slowmo = Number(document.getElementById("slowmo").value || 0);
       const output = document.getElementById("output").value || "";
@@ -309,39 +538,44 @@ def dashboard_html() -> str:
       const data = await res.json();
       scrapeStatusEl.textContent = JSON.stringify(data, null, 2);
       if (data.started) {
-        setBadge("", "Running");
+        setBadge("running", "statusRunning");
       }
-      await refreshStatus();
     }
 
-    async function sendMessage(text) {
+    async function sendMessage() {
+      const input = document.getElementById("chatInput");
+      const text = input.value.trim();
+      if (!text) return;
+      
       const channel_user_id = document.getElementById("userId").value.trim() || "u123";
+      input.value = "";
       addMsg("me", text);
-      const res = await fetch("/simulate/chat", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({channel_user_id, text})
-      });
-      const data = await res.json();
-      addMsg("bot", data.reply || "No reply");
+      
+      try {
+        const res = await fetch("/simulate/chat", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({channel_user_id, text})
+        });
+        const data = await res.json();
+        addMsg("bot", data.reply || i18n[currentLang].noReply);
+      } catch (e) {
+        addMsg("bot", "Error connecting to server.");
+      }
     }
 
     document.getElementById("startScrapeBtn").addEventListener("click", startScrape);
     document.getElementById("refreshStatusBtn").addEventListener("click", refreshStatus);
-    document.getElementById("sendBtn").addEventListener("click", async () => {
-      const input = document.getElementById("chatInput");
-      const text = input.value.trim();
-      if (!text) return;
-      input.value = "";
-      await sendMessage(text);
-    });
-    document.getElementById("sendQuickBtn").addEventListener("click", async () => {
-      const text = document.getElementById("quickMsg").value.trim();
-      if (!text) return;
-      await sendMessage(text);
-    });
+    document.getElementById("sendBtn").addEventListener("click", sendMessage);
     document.getElementById("clearChatBtn").addEventListener("click", () => {
       chatBoxEl.textContent = "";
+    });
+    
+    document.getElementById("chatInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
     });
 
     setInterval(refreshStatus, 3000);
@@ -350,6 +584,7 @@ def dashboard_html() -> str:
 </body>
 </html>
     """.strip()
+
 
 
 def create_app(settings: Settings | None = None, llm_client: Any | None = None) -> FastAPI:
