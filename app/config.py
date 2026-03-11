@@ -20,6 +20,7 @@ class Settings:
     orders_xlsx: Path
     sessions_db: Path
     api_endpoints_json: Path
+    vector_index_path: Path
     # LLM provider selection
     llm_provider: str  # "groq" or "ollama"
     # Groq (cloud)
@@ -41,6 +42,7 @@ class Settings:
             orders_xlsx=Path(os.getenv("BAZAREY_ORDERS_XLSX", data_dir / "orders.xlsx")),
             sessions_db=Path(os.getenv("BAZAREY_SESSIONS_DB", data_dir / "sessions.db")),
             api_endpoints_json=Path(os.getenv("BAZAREY_API_ENDPOINTS_JSON", data_dir / "api_endpoints.json")),
+            vector_index_path=Path(os.getenv("BAZAREY_VECTOR_INDEX", data_dir / "products.index")),
             llm_provider=os.getenv("LLM_PROVIDER", "ollama").lower(),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             groq_model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),

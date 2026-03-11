@@ -17,6 +17,8 @@ except Exception:  # pragma: no cover
     def _normalize_query(t: str) -> str:  # type: ignore[misc]
         return t
 
+from app.tools.vector_store import VectorStore
+
 PRODUCT_HEADERS = [
     "product_id",
     "name",
@@ -33,10 +35,11 @@ PRODUCT_HEADERS = [
 
 
 class ProductCatalog:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, vector_index_path: Optional[Path] = None) -> None:
         self.path = Path(path)
         self._cache: List[Dict[str, Any]] = []
         self._mtime: Optional[float] = None
+        self.vector_store = VectorStore(vector_index_path) if vector_index_path else None
 
     def ensure_file(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,30 +134,62 @@ class ProductCatalog:
 
         self._cache = rows
         self._mtime = mtime
+
+        # Update vector index if it's missing or outdated
+        if self.vector_store and not self.vector_store.load():
+            self.vector_store.build_index(rows)
+
         return rows
 
     def search_products(
         self, query: str, limit: int = 5, min_score: float = 35,
     ) -> List[Dict[str, Any]]:
-        """Search products with fuzzy matching. Returns only results above min_score."""
-        # Translate Banglish / Bangla → English before fuzzy matching
+        """Search products with Hybrid Matching (Fuzzy + Semantic)."""
         normalized_query = _normalize_query(query)
         products = self._load()
-        ranked: List[tuple[float, Dict[str, Any]]] = []
-
-        for product in products:
-            if not product.get("is_active", True):
+        
+        # 1. Fuzzy Search Results
+        fuzzy_results: Dict[str, float] = {}
+        for p in products:
+            if not p.get("is_active", True):
                 continue
-            # Score against both original and normalised query for best coverage
             score = max(
-                self._product_score(normalized_query, product),
-                self._product_score(query, product),
+                self._product_score(normalized_query, p),
+                self._product_score(query, p),
             )
-            if score < min_score:
-                continue
-            ranked.append((score, product))
+            if score >= min_score:
+                fuzzy_results[p["product_id"]] = score
+
+        # 2. Semantic Search Results
+        vector_results: Dict[str, float] = {}
+        if self.vector_store:
+            v_matches = self.vector_store.search(query, top_k=limit * 2)
+            for m in v_matches:
+                vector_results[m["product_id"]] = m["score"]
+
+        # 3. Combine results (Hybrid)
+        combined: Dict[str, float] = {}
+        all_ids = set(fuzzy_results.keys()) | set(vector_results.keys())
+        
+        for pid in all_ids:
+            f_score = fuzzy_results.get(pid, 0)
+            v_score = vector_results.get(pid, 0)
+            
+            # If item is in both, boost it. Otherwise take the max or weighted sum.
+            if f_score > 0 and v_score > 0:
+                combined[pid] = max(f_score, v_score) * 1.2
+            else:
+                combined[pid] = max(f_score, v_score)
+
+        # 4. Final Ranking
+        ranked = []
+        for pid, score in combined.items():
+            product = self.get_product(pid)
+            if product:
+                ranked.append((score, product))
 
         ranked.sort(key=lambda x: x[0], reverse=True)
+        
         results = []
         for score, product in ranked[:limit]:
             results.append(
