@@ -29,6 +29,10 @@ class Settings:
     # Ollama (local)
     ollama_host: str
     ollama_model: str
+    # Facebook Messenger integration
+    fb_verify_token: str = ""
+    fb_page_access_token: str = ""
+    fb_app_secret: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -48,4 +52,7 @@ class Settings:
             groq_model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
             ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
             ollama_model=os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+            fb_verify_token=os.getenv("FB_VERIFY_TOKEN", ""),
+            fb_page_access_token=os.getenv("FB_PAGE_ACCESS_TOKEN", ""),
+            fb_app_secret=os.getenv("FB_APP_SECRET", ""),
         )

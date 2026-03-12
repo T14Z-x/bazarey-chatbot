@@ -16,6 +16,7 @@ from app.bot.orchestrator import ChatOrchestrator
 from app.config import Settings
 from app.llm.groq_client import GroqClient
 from app.llm.ollama_client import OllamaClient
+from app.routers.messenger_webhook import create_messenger_router
 from app.tools.order_sheet import OrderSheet
 from app.tools.product_catalog import ProductCatalog
 from app.tools.session_store import SessionStore
@@ -875,7 +876,9 @@ def create_app(settings: Settings | None = None, llm_client: Any | None = None) 
     simulator_adapter = SimulatorChannelAdapter()
 
     app = FastAPI(title="Bazarey Local Chat Simulator")
+    app.state.settings = settings
     app.state.orchestrator = orchestrator
+    app.include_router(create_messenger_router(settings))
     app.state.scrape_status_lock = threading.Lock()
     app.state.scrape_status = {
         "running": False,
