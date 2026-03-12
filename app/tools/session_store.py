@@ -15,7 +15,13 @@ DEFAULT_STATE: Dict[str, Any] = {
     "pending_items": [],
     "notes": "",
     "last_product_candidates": [],
+    "pending_choice_candidates": [],
     "awaiting_qty": False,
+    "awaiting_choice": False,
+    "choice_context": "",
+    "choice_qty": 1,
+    "choice_qty_text": "",
+    "last_parse_meta": {},
     "checkout_flow": "",
 }
 

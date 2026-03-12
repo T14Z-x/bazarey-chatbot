@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Callable, Dict, List, Set
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode
 
 import httpx
@@ -473,13 +473,36 @@ def scrape_from_discovered_endpoints(endpoints: List[str]) -> List[Dict[str, Any
     return out
 
 
-def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpoints_path: Path) -> int:
+def run_scraper(
+    headless: bool,
+    limit: int,
+    output: Path,
+    slowmo: int,
+    api_endpoints_path: Path,
+    progress_callback: Callable[[Dict[str, Any]], None] | None = None,
+) -> int:
     existing = load_existing(output)
     discovered_products: List[Dict[str, Any]] = []
     endpoint_urls: Set[str] = set()
     all_listing_products: List[Dict[str, Any]] = []
 
+    def emit_progress(**payload: Any) -> None:
+        if not progress_callback:
+            return
+        try:
+            progress_callback(payload)
+        except Exception:
+            # Progress updates should never break scraping.
+            log.debug("progress_callback_failed", exc_info=True)
+
     log.info("Starting scraper — headless=%s, limit=%d", headless, limit)
+    emit_progress(
+        phase="init",
+        phase_label="Initializing scraper",
+        phase_current=0,
+        phase_total=1,
+        current_message="Starting scraper...",
+    )
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless, slow_mo=slowmo)
@@ -508,6 +531,13 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
 
         # Load first page and detect total page count
         log.info("Loading %s", TARGET_URL)
+        emit_progress(
+            phase="collect",
+            phase_label="Collecting catalog pages",
+            phase_current=0,
+            phase_total=1,
+            current_message="Opening product catalog...",
+        )
         try_goto(page, TARGET_URL)
 
         # Scroll down to trigger lazy loading and load pagination
@@ -522,6 +552,16 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
         page1_products = collect_dom_listing(page, TARGET_URL)
         all_listing_products.extend(page1_products)
         log.info("Page 1: collected %d products from DOM", len(page1_products))
+        emit_progress(
+            phase="collect",
+            phase_label="Collecting catalog pages",
+            phase_current=1,
+            phase_total=max(1, total_pages),
+            collected_dom=len(all_listing_products),
+            discovered_api=len(discovered_products),
+            endpoint_count=len(endpoint_urls),
+            current_message=f"Collected page 1/{max(1, total_pages)}",
+        )
 
         # Navigate through remaining pages by CLICKING pagination buttons
         # (the site is a SPA — URL navigation doesn't change displayed products)
@@ -569,6 +609,17 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
                     log.info("Stopping pagination: 3 consecutive pages with no new products")
                     break
 
+            emit_progress(
+                phase="collect",
+                phase_label="Collecting catalog pages",
+                phase_current=min(page_num, max(1, total_pages)),
+                phase_total=max(1, total_pages),
+                collected_dom=len(all_listing_products),
+                discovered_api=len(discovered_products),
+                endpoint_count=len(endpoint_urls),
+                current_message=f"Collected page {min(page_num, max(1, total_pages))}/{max(1, total_pages)}",
+            )
+
             time.sleep(random.uniform(0.3, 0.8))
 
         browser.close()
@@ -584,40 +635,160 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
     api_endpoints_path.write_text(json.dumps(api_endpoint_list, indent=2), encoding="utf-8")
 
     # Try fetching from discovered API endpoints (with pagination)
+    emit_progress(
+        phase="discover_api",
+        phase_label="Extracting API products",
+        phase_current=0,
+        phase_total=1,
+        endpoint_count=len(api_endpoint_list),
+        current_message="Fetching discovered API endpoints...",
+    )
     fetched_api_products = scrape_from_discovered_endpoints(api_endpoint_list)
     preferred = discovered_products + fetched_api_products
+    emit_progress(
+        phase="discover_api",
+        phase_label="Extracting API products",
+        phase_current=1,
+        phase_total=1,
+        discovered_api=len(preferred),
+        endpoint_count=len(api_endpoint_list),
+        current_message=f"Extracted {len(preferred)} API products from {len(api_endpoint_list)} endpoints",
+    )
 
     normalized_rows: List[Dict[str, Any]] = []
     dedupe: Set[str] = set()
+    total_candidates = len(preferred) + len(all_listing_products)
+    progress_idx = 0
+
+    emit_progress(
+        phase="normalize",
+        phase_label="Normalizing products",
+        phase_current=0,
+        phase_total=max(1, total_candidates),
+        total_candidates=total_candidates,
+        processed_products=0,
+        current_message="Normalizing product rows...",
+    )
 
     # Prefer API-sourced products (richer data)
     if preferred:
         log.info("Using %d API-sourced products as primary source", len(preferred))
         for item in preferred:
+            progress_idx += 1
             normalized = normalize_product(item, TARGET_URL)
             if not normalized:
+                if progress_idx % 25 == 0:
+                    emit_progress(
+                        phase="normalize",
+                        phase_label="Normalizing products",
+                        phase_current=min(progress_idx, max(1, total_candidates)),
+                        phase_total=max(1, total_candidates),
+                        processed_products=len(normalized_rows),
+                        total_candidates=total_candidates,
+                        current_message=f"Processed {progress_idx}/{max(1, total_candidates)} candidates",
+                    )
                 continue
             key = normalized["product_id"] or normalized["url"]
             if key in dedupe:
+                if progress_idx % 25 == 0:
+                    emit_progress(
+                        phase="normalize",
+                        phase_label="Normalizing products",
+                        phase_current=min(progress_idx, max(1, total_candidates)),
+                        phase_total=max(1, total_candidates),
+                        processed_products=len(normalized_rows),
+                        total_candidates=total_candidates,
+                        current_message=f"Processed {progress_idx}/{max(1, total_candidates)} candidates",
+                    )
                 continue
             dedupe.add(key)
             normalized_rows.append(normalized)
+            emit_progress(
+                phase="normalize",
+                phase_label="Normalizing products",
+                phase_current=min(progress_idx, max(1, total_candidates)),
+                phase_total=max(1, total_candidates),
+                processed_products=len(normalized_rows),
+                total_candidates=total_candidates,
+                current_message=f"Added {normalized['name']}",
+                product={
+                    "name": normalized.get("name", ""),
+                    "unit": normalized.get("unit", ""),
+                    "price": normalized.get("price"),
+                },
+            )
             if limit > 0 and len(normalized_rows) >= limit:
+                emit_progress(
+                    phase="normalize",
+                    phase_label="Normalizing products",
+                    phase_current=min(progress_idx, max(1, total_candidates)),
+                    phase_total=max(1, total_candidates),
+                    processed_products=len(normalized_rows),
+                    total_candidates=total_candidates,
+                    current_message=f"Reached limit ({limit}), stopping early",
+                )
                 break
 
     # Also add DOM-scraped products (may have additional items or fill gaps)
-    log.info("Processing %d DOM-listed products", len(all_listing_products))
-    for item in all_listing_products:
-        normalized = normalize_product(item, TARGET_URL)
-        if not normalized:
-            continue
-        key = normalized["product_id"] or normalized["url"]
-        if key in dedupe:
-            continue
-        dedupe.add(key)
-        normalized_rows.append(normalized)
-        if limit > 0 and len(normalized_rows) >= limit:
-            break
+    if limit > 0 and len(normalized_rows) >= limit:
+        log.info("Skipping DOM products because requested limit is already reached.")
+    else:
+        log.info("Processing %d DOM-listed products", len(all_listing_products))
+        for item in all_listing_products:
+            progress_idx += 1
+            normalized = normalize_product(item, TARGET_URL)
+            if not normalized:
+                if progress_idx % 25 == 0:
+                    emit_progress(
+                        phase="normalize",
+                        phase_label="Normalizing products",
+                        phase_current=min(progress_idx, max(1, total_candidates)),
+                        phase_total=max(1, total_candidates),
+                        processed_products=len(normalized_rows),
+                        total_candidates=total_candidates,
+                        current_message=f"Processed {progress_idx}/{max(1, total_candidates)} candidates",
+                    )
+                continue
+            key = normalized["product_id"] or normalized["url"]
+            if key in dedupe:
+                if progress_idx % 25 == 0:
+                    emit_progress(
+                        phase="normalize",
+                        phase_label="Normalizing products",
+                        phase_current=min(progress_idx, max(1, total_candidates)),
+                        phase_total=max(1, total_candidates),
+                        processed_products=len(normalized_rows),
+                        total_candidates=total_candidates,
+                        current_message=f"Processed {progress_idx}/{max(1, total_candidates)} candidates",
+                    )
+                continue
+            dedupe.add(key)
+            normalized_rows.append(normalized)
+            emit_progress(
+                phase="normalize",
+                phase_label="Normalizing products",
+                phase_current=min(progress_idx, max(1, total_candidates)),
+                phase_total=max(1, total_candidates),
+                processed_products=len(normalized_rows),
+                total_candidates=total_candidates,
+                current_message=f"Added {normalized['name']}",
+                product={
+                    "name": normalized.get("name", ""),
+                    "unit": normalized.get("unit", ""),
+                    "price": normalized.get("price"),
+                },
+            )
+            if limit > 0 and len(normalized_rows) >= limit:
+                emit_progress(
+                    phase="normalize",
+                    phase_label="Normalizing products",
+                    phase_current=min(progress_idx, max(1, total_candidates)),
+                    phase_total=max(1, total_candidates),
+                    processed_products=len(normalized_rows),
+                    total_candidates=total_candidates,
+                    current_message=f"Reached limit ({limit}), stopping early",
+                )
+                break
 
     # If we still have products that need detail enrichment and we don't have
     # enough data from API, scrape individual product pages
@@ -627,6 +798,14 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
     ]
     if products_needing_detail and len(products_needing_detail) <= 500:
         log.info("Enriching %d products via detail page scraping", len(products_needing_detail))
+        emit_progress(
+            phase="enrich",
+            phase_label="Enriching product details",
+            phase_current=0,
+            phase_total=len(products_needing_detail),
+            processed_products=len(normalized_rows),
+            current_message=f"Enriching {len(products_needing_detail)} products...",
+        )
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=headless, slow_mo=slowmo)
             context = browser.new_context(
@@ -645,6 +824,29 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
                             normalized_rows[i] = detailed
                             break
                 count += 1
+                if detailed:
+                    emit_progress(
+                        phase="enrich",
+                        phase_label="Enriching product details",
+                        phase_current=count,
+                        phase_total=len(products_needing_detail),
+                        processed_products=len(normalized_rows),
+                        current_message=f"Enriched {detailed.get('name', 'product')}",
+                        product={
+                            "name": detailed.get("name", ""),
+                            "unit": detailed.get("unit", ""),
+                            "price": detailed.get("price"),
+                        },
+                    )
+                elif count % 20 == 0:
+                    emit_progress(
+                        phase="enrich",
+                        phase_label="Enriching product details",
+                        phase_current=count,
+                        phase_total=len(products_needing_detail),
+                        processed_products=len(normalized_rows),
+                        current_message=f"Enriched {count}/{len(products_needing_detail)} detail pages",
+                    )
                 if count % 20 == 0:
                     log.info("Detail scrape progress: %d/%d", count, len(products_needing_detail))
                     # Incremental save
@@ -656,8 +858,25 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
                             merged_dedup[k] = row
                     write_products(output, list(merged_dedup.values()))
             browser.close()
+    else:
+        emit_progress(
+            phase="enrich",
+            phase_label="Enriching product details",
+            phase_current=1,
+            phase_total=1,
+            processed_products=len(normalized_rows),
+            current_message="Detail enrichment skipped",
+        )
 
     # Merge with existing data and write final output
+    emit_progress(
+        phase="save",
+        phase_label="Saving output file",
+        phase_current=0,
+        phase_total=1,
+        processed_products=len(normalized_rows),
+        current_message="Writing products.xlsx...",
+    )
     merged_map = dict(existing)
     for row in normalized_rows:
         key = row["product_id"] or row["url"]
@@ -666,6 +885,14 @@ def run_scraper(headless: bool, limit: int, output: Path, slowmo: int, api_endpo
     final_rows = list(merged_map.values())
     write_products(output, final_rows)
     log.info("Saved %d total products to %s", len(final_rows), output)
+    emit_progress(
+        phase="save",
+        phase_label="Saving output file",
+        phase_current=1,
+        phase_total=1,
+        processed_products=len(final_rows),
+        current_message=f"Saved {len(final_rows)} products",
+    )
     return len(final_rows)
 
 

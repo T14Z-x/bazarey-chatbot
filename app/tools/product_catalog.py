@@ -145,6 +145,8 @@ class ProductCatalog:
         self, query: str, limit: int = 5, min_score: float = 35,
     ) -> List[Dict[str, Any]]:
         """Search products with Hybrid Matching (Fuzzy + Semantic)."""
+        if not str(query or "").strip():
+            return []
         normalized_query = _normalize_query(query)
         products = self._load()
         
@@ -184,6 +186,8 @@ class ProductCatalog:
         # 4. Final Ranking
         ranked = []
         for pid, score in combined.items():
+            if score < min_score:
+                continue
             product = self.get_product(pid)
             if product:
                 ranked.append((score, product))
