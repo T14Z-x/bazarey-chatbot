@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,12 +34,21 @@ PRODUCT_HEADERS = [
     "updated_at",
 ]
 
+log = logging.getLogger(__name__)
+
 
 class ProductCatalog:
-    def __init__(self, path: Path, vector_index_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        vector_index_path: Optional[Path] = None,
+        fallback_path: Optional[Path] = None,
+    ) -> None:
         self.path = Path(path)
+        self.fallback_path = Path(fallback_path) if fallback_path else None
         self._cache: List[Dict[str, Any]] = []
         self._mtime: Optional[float] = None
+        self._fallback_mtime: Optional[float] = None
         self.vector_store = VectorStore(vector_index_path) if vector_index_path else None
 
     def ensure_file(self) -> None:
@@ -100,13 +110,8 @@ class ProductCatalog:
         except Exception:
             return None
 
-    def _load(self) -> List[Dict[str, Any]]:
-        self.ensure_file()
-        mtime = self.path.stat().st_mtime
-        if self._cache and self._mtime == mtime:
-            return self._cache
-
-        wb = load_workbook(self.path, data_only=True)
+    def _read_rows(self, source_path: Path) -> List[Dict[str, Any]]:
+        wb = load_workbook(source_path, data_only=True)
         ws = wb.active
         rows: List[Dict[str, Any]] = []
         headers = [c.value for c in ws[1]]
@@ -131,9 +136,45 @@ class ProductCatalog:
                 }
             )
         wb.close()
+        return rows
+
+    def _load(self) -> List[Dict[str, Any]]:
+        self.ensure_file()
+        mtime = self.path.stat().st_mtime
+        fallback_mtime = (
+            self.fallback_path.stat().st_mtime
+            if self.fallback_path and self.fallback_path.exists()
+            else None
+        )
+        if self._cache and self._mtime == mtime and self._fallback_mtime == fallback_mtime:
+            return self._cache
+
+        rows = self._read_rows(self.path)
+
+        # Render-safe fallback: if primary catalog is empty, load from a fallback file.
+        if (
+            not rows
+            and self.fallback_path
+            and self.fallback_path != self.path
+            and self.fallback_path.exists()
+        ):
+            try:
+                fallback_rows = self._read_rows(self.fallback_path)
+            except Exception:
+                log.exception("Failed to read fallback catalog: %s", self.fallback_path)
+                fallback_rows = []
+            if fallback_rows:
+                log.warning(
+                    "Primary catalog is empty at %s; using fallback catalog %s (%d rows)",
+                    self.path,
+                    self.fallback_path,
+                    len(fallback_rows),
+                )
+                rows = fallback_rows
 
         self._cache = rows
         self._mtime = mtime
+        self._fallback_mtime = fallback_mtime
 
         # Update vector index if it's missing or outdated
         if self.vector_store and not self.vector_store.load():

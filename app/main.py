@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
 from datetime import datetime, timezone
@@ -856,7 +857,12 @@ def dashboard_html() -> str:
 def create_app(settings: Settings | None = None, llm_client: Any | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
 
-    catalog = ProductCatalog(settings.products_xlsx, vector_index_path=settings.vector_index_path)
+    fallback_catalog_path = settings.fallback_products_xlsx or (settings.data_dir / "products.last_good.xlsx")
+    catalog = ProductCatalog(
+        settings.products_xlsx,
+        vector_index_path=settings.vector_index_path,
+        fallback_path=fallback_catalog_path,
+    )
     catalog.ensure_file()
 
     orders = OrderSheet(settings.orders_xlsx)
@@ -912,13 +918,75 @@ def create_app(settings: Settings | None = None, llm_client: Any | None = None) 
         with app.state.scrape_status_lock:
             return dict(app.state.scrape_status)
 
+    def is_writable_dir(path: Path) -> bool:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".bazarey_write_probe"
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("ok")
+            probe.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
+
+    def catalog_rows_count(path: Path) -> int:
+        try:
+            from openpyxl import load_workbook
+
+            if not path.exists():
+                return 0
+            wb = load_workbook(path, data_only=True)
+            ws = wb.active
+            # First row is header if file format is valid.
+            count = max(0, ws.max_row - 1)
+            wb.close()
+            return count
+        except Exception:
+            return 0
+
+    def scrape_error_with_hint(exc: Exception) -> str:
+        msg = str(exc)
+        lower = msg.lower()
+        if "executable doesn't exist" in lower or "playwright install" in lower:
+            return (
+                f"{msg} | Hint: Install Chromium during Render build with "
+                "'python -m playwright install chromium'."
+            )
+        if "host system is missing dependencies" in lower:
+            return (
+                f"{msg} | Hint: Install Playwright system deps during Render build with "
+                "'python -m playwright install --with-deps chromium'."
+            )
+        if "permission denied" in lower or "read-only file system" in lower:
+            return (
+                f"{msg} | Hint: Set BAZAREY_DATA_DIR to a writable path "
+                "(for Render use /tmp/bazarey-data or a mounted persistent disk path)."
+            )
+        return msg
+
     def resolve_output_path(path_input: str) -> Path:
         if not path_input:
-            return settings.products_xlsx
-        path = Path(path_input)
-        if path.is_absolute():
+            path = settings.products_xlsx
+        else:
+            raw = Path(path_input)
+            path = raw if raw.is_absolute() else (settings.base_dir / raw)
+
+        if is_writable_dir(path.parent):
             return path
-        return settings.base_dir / path
+
+        fallback = settings.data_dir / path.name
+        if is_writable_dir(fallback.parent):
+            logging.warning(
+                "Scrape output path is not writable (%s); falling back to %s",
+                path,
+                fallback,
+            )
+            return fallback
+
+        # Keep behavior explicit if both paths are not writable.
+        raise RuntimeError(
+            f"Neither output path {path} nor fallback path {fallback} is writable."
+        )
 
     def run_scrape_job(options: ScrapeStartRequest) -> None:
         started_monotonic = time.monotonic()
@@ -998,6 +1066,15 @@ def create_app(settings: Settings | None = None, llm_client: Any | None = None) 
             from app.scraping.scrape_products import run_scraper
 
             output_path = resolve_output_path(options.output)
+            backup_catalog = settings.data_dir / "products.last_good.xlsx"
+
+            # Keep a last-known-good snapshot before attempting a new scrape.
+            if catalog_rows_count(output_path) > 0:
+                try:
+                    shutil.copy2(output_path, backup_catalog)
+                except Exception:
+                    logging.warning("Failed to create catalog backup at %s", backup_catalog, exc_info=True)
+
             total = run_scraper(
                 headless=options.headless,
                 limit=options.limit,
@@ -1006,6 +1083,14 @@ def create_app(settings: Settings | None = None, llm_client: Any | None = None) 
                 api_endpoints_path=settings.api_endpoints_json,
                 progress_callback=on_scrape_progress,
             )
+
+            # Refresh fallback snapshot after successful scrape.
+            if catalog_rows_count(output_path) > 0:
+                try:
+                    shutil.copy2(output_path, backup_catalog)
+                except Exception:
+                    logging.warning("Failed to refresh catalog backup at %s", backup_catalog, exc_info=True)
+
             update_scrape_status(
                 running=False,
                 finished_at=utc_now_iso(),
@@ -1023,10 +1108,49 @@ def create_app(settings: Settings | None = None, llm_client: Any | None = None) 
                 processed_products=total,
             )
         except Exception as exc:  # pragma: no cover
+            logging.exception("scrape_job_failed")
+            err_text = scrape_error_with_hint(exc)
+
+            try:
+                output_path = resolve_output_path(options.output)
+            except Exception:
+                output_path = settings.products_xlsx
+            backup_catalog = settings.data_dir / "products.last_good.xlsx"
+            fallback_used = ""
+
+            # Fallback: if scrape fails and target catalog is empty, restore last good file.
+            if catalog_rows_count(output_path) == 0:
+                fallback_candidates = [
+                    settings.fallback_products_xlsx,
+                    backup_catalog,
+                ]
+                for candidate in fallback_candidates:
+                    if not candidate:
+                        continue
+                    source = Path(candidate)
+                    if source == output_path:
+                        continue
+                    if catalog_rows_count(source) <= 0:
+                        continue
+                    try:
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, output_path)
+                        fallback_used = str(source)
+                        logging.warning("Restored catalog from fallback file: %s -> %s", source, output_path)
+                        break
+                    except Exception:
+                        logging.warning("Fallback restore failed from %s", source, exc_info=True)
+
+            current_message = (
+                f"Scrape failed, fallback catalog loaded from {fallback_used}."
+                if fallback_used
+                else err_text
+            )
             update_scrape_status(
                 running=False,
                 finished_at=utc_now_iso(),
-                last_error=str(exc),
+                last_error=err_text,
+                last_output=str(output_path),
                 phase="failed",
                 phase_label="Failed",
                 phase_current=0,
@@ -1034,7 +1158,7 @@ def create_app(settings: Settings | None = None, llm_client: Any | None = None) 
                 progress_percent=0.0,
                 elapsed_seconds=round(time.monotonic() - started_monotonic, 1),
                 eta_seconds=None,
-                current_message=str(exc),
+                current_message=current_message,
             )
 
     @app.get("/health")

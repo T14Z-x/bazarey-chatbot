@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 try:
     from dotenv import load_dotenv
@@ -33,12 +34,43 @@ class Settings:
     fb_verify_token: str = ""
     fb_page_access_token: str = ""
     fb_app_secret: str = ""
+    fallback_products_xlsx: Optional[Path] = None
+
+    @staticmethod
+    def _is_writable_dir(path: Path) -> bool:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".bazarey_write_probe"
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("ok")
+            probe.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
 
     @classmethod
     def from_env(cls) -> "Settings":
         base_dir = Path(os.getenv("BAZAREY_BASE_DIR", Path(__file__).resolve().parents[1]))
-        data_dir = Path(os.getenv("BAZAREY_DATA_DIR", base_dir / "data"))
-        data_dir.mkdir(parents=True, exist_ok=True)
+        configured_data_dir = os.getenv("BAZAREY_DATA_DIR", "").strip()
+        if configured_data_dir:
+            data_dir = Path(configured_data_dir)
+        elif os.getenv("RENDER", "").strip().lower() == "true":
+            # Render containers can reliably write to /tmp during runtime.
+            data_dir = Path("/tmp/bazarey-data")
+        else:
+            data_dir = base_dir / "data"
+
+        if not cls._is_writable_dir(data_dir):
+            # Last-resort writable location so app can still run.
+            data_dir = Path("/tmp/bazarey-data")
+            cls._is_writable_dir(data_dir)
+
+        fallback_products_env = os.getenv("BAZAREY_FALLBACK_PRODUCTS_XLSX", "").strip()
+        fallback_products_xlsx: Optional[Path] = None
+        if fallback_products_env:
+            raw_fallback = Path(fallback_products_env)
+            fallback_products_xlsx = raw_fallback if raw_fallback.is_absolute() else (base_dir / raw_fallback)
+
         return cls(
             base_dir=base_dir,
             data_dir=data_dir,
@@ -55,4 +87,5 @@ class Settings:
             fb_verify_token=os.getenv("FB_VERIFY_TOKEN", ""),
             fb_page_access_token=os.getenv("FB_PAGE_ACCESS_TOKEN", ""),
             fb_app_secret=os.getenv("FB_APP_SECRET", ""),
+            fallback_products_xlsx=fallback_products_xlsx,
         )

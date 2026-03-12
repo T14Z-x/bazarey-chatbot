@@ -76,6 +76,7 @@ GROQ_MODEL=llama-3.1-8b-instant
 BAZAREY_BASE_DIR=.
 BAZAREY_DATA_DIR=./data
 BAZAREY_PRODUCTS_XLSX=./data/products.xlsx
+BAZAREY_FALLBACK_PRODUCTS_XLSX=
 BAZAREY_ORDERS_XLSX=./data/orders.xlsx
 BAZAREY_SESSIONS_DB=./data/sessions.db
 BAZAREY_API_ENDPOINTS_JSON=./data/api_endpoints.json
@@ -98,6 +99,18 @@ Useful flags:
 ```bash
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+## Render Deployment Notes
+
+- Keep start command:
+  - `uvicorn app.main:app --host 0.0.0.0 --port 10000`
+- Build command must install Playwright Chromium:
+  - `pip install -r requirements.txt && python -m playwright install --with-deps chromium || python -m playwright install chromium`
+- Set writable runtime data directory:
+  - `BAZAREY_DATA_DIR=/tmp/bazarey-data`
+- Optional catalog fallback if scrape fails:
+  - `BAZAREY_FALLBACK_PRODUCTS_XLSX=/path/to/last-good-products.xlsx`
+- A sample `render.yaml` is included in the repo root.
 
 Open dashboard:
 
@@ -148,6 +161,9 @@ python -m pytest -q
 
 - Playwright browser missing:
   - `python -m playwright install chromium`
+- Render scraper fails before collecting products:
+  - Ensure your Render build command includes Playwright install.
+  - Ensure `BAZAREY_DATA_DIR` points to a writable path.
 - Empty product search results:
   - Run scraper first and verify `data/products.xlsx` has rows
 - Ollama connection/model issues:

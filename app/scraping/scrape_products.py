@@ -87,6 +87,48 @@ def ensure_products_file(path: Path) -> None:
     wb.save(path)
 
 
+def _is_writable_dir(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".bazarey_write_probe"
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _raise_if_output_not_writable(path: Path) -> None:
+    if _is_writable_dir(path.parent):
+        return
+    raise RuntimeError(
+        f"Output directory is not writable: {path.parent}. "
+        "Set BAZAREY_DATA_DIR to a writable path (for Render use /tmp/bazarey-data or a mounted disk path)."
+    )
+
+
+def _format_runtime_hint(exc: Exception) -> str:
+    msg = str(exc)
+    lower = msg.lower()
+    if "executable doesn't exist" in lower or "playwright install" in lower:
+        return (
+            "Chromium is not installed for Playwright. "
+            "Render build command should include: python -m playwright install chromium"
+        )
+    if "host system is missing dependencies" in lower:
+        return (
+            "Chromium OS dependencies are missing. "
+            "Render build command should include: python -m playwright install --with-deps chromium"
+        )
+    if "permission denied" in lower or "read-only file system" in lower:
+        return (
+            "Write permission issue detected. "
+            "Set BAZAREY_DATA_DIR to a writable path (for Render use /tmp/bazarey-data or a mounted disk)."
+        )
+    return ""
+
+
 def load_existing(path: Path) -> Dict[str, Dict[str, Any]]:
     ensure_products_file(path)
     wb = load_workbook(path, data_only=True)
@@ -481,6 +523,7 @@ def run_scraper(
     api_endpoints_path: Path,
     progress_callback: Callable[[Dict[str, Any]], None] | None = None,
 ) -> int:
+    _raise_if_output_not_writable(output)
     existing = load_existing(output)
     discovered_products: List[Dict[str, Any]] = []
     endpoint_urls: Set[str] = set()
@@ -504,125 +547,132 @@ def run_scraper(
         current_message="Starting scraper...",
     )
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless, slow_mo=slowmo)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/122.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=headless, slow_mo=slowmo)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/122.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
 
-        def on_response(resp: Any) -> None:
-            try:
-                ctype = (resp.headers or {}).get("content-type", "")
-                if "application/json" not in ctype and not looks_like_product_endpoint(resp.url):
-                    return
-                body = resp.text()
-                payload = decode_response_json(body)
-                products = extract_products_from_payload(payload, source_url=resp.url)
-                if products:
-                    endpoint_urls.add(resp.url)
-                    discovered_products.extend(products)
-            except Exception:
-                return
-
-        page.on("response", on_response)
-
-        # Load first page and detect total page count
-        log.info("Loading %s", TARGET_URL)
-        emit_progress(
-            phase="collect",
-            phase_label="Collecting catalog pages",
-            phase_current=0,
-            phase_total=1,
-            current_message="Opening product catalog...",
-        )
-        try_goto(page, TARGET_URL)
-
-        # Scroll down to trigger lazy loading and load pagination
-        for _ in range(5):
-            page.mouse.wheel(0, 3000)
-            time.sleep(0.6)
-
-        total_pages = _get_total_pages(page)
-        log.info("Detected %d total pages", total_pages)
-
-        # Collect products from page 1
-        page1_products = collect_dom_listing(page, TARGET_URL)
-        all_listing_products.extend(page1_products)
-        log.info("Page 1: collected %d products from DOM", len(page1_products))
-        emit_progress(
-            phase="collect",
-            phase_label="Collecting catalog pages",
-            phase_current=1,
-            phase_total=max(1, total_pages),
-            collected_dom=len(all_listing_products),
-            discovered_api=len(discovered_products),
-            endpoint_count=len(endpoint_urls),
-            current_message=f"Collected page 1/{max(1, total_pages)}",
-        )
-
-        # Navigate through remaining pages by CLICKING pagination buttons
-        # (the site is a SPA — URL navigation doesn't change displayed products)
-        global_seen_ids: Set[str] = {p.get("product_id", "") for p in page1_products}
-        stale_page_count = 0
-        for page_num in range(2, total_pages + 1):
-            if limit > 0 and len(all_listing_products) >= limit:
-                break
-
-            log.info("Clicking to page %d/%d", page_num, total_pages)
-            if not _click_next_page(page, page_num):
-                log.warning("Could not click to page %d — trying URL fallback", page_num)
-                # Fallback: try URL navigation
-                page_url = f"{TARGET_URL}?page={page_num}"
+            def on_response(resp: Any) -> None:
                 try:
-                    try_goto(page, page_url, retries=2)
-                    for _ in range(3):
-                        page.mouse.wheel(0, 3000)
-                        time.sleep(0.4)
-                except Exception as exc:
-                    log.warning("URL fallback also failed for page %d: %s", page_num, exc)
-                    continue
+                    ctype = (resp.headers or {}).get("content-type", "")
+                    if "application/json" not in ctype and not looks_like_product_endpoint(resp.url):
+                        return
+                    body = resp.text()
+                    payload = decode_response_json(body)
+                    products = extract_products_from_payload(payload, source_url=resp.url)
+                    if products:
+                        endpoint_urls.add(resp.url)
+                        discovered_products.extend(products)
+                except Exception:
+                    return
 
-            # Scroll to ensure all lazy content loads
-            for _ in range(3):
-                page.mouse.wheel(0, 2000)
-                time.sleep(0.3)
+            page.on("response", on_response)
 
-            page_products = collect_dom_listing(page, TARGET_URL)
-            # Filter out products we already have (dedup across pages)
-            new_products = [
-                p for p in page_products
-                if p.get("product_id", "") not in global_seen_ids
-            ]
-            if new_products:
-                all_listing_products.extend(new_products)
-                global_seen_ids.update(p.get("product_id", "") for p in new_products)
-                stale_page_count = 0
-                log.info("Page %d: collected %d new products (total DOM: %d)",
-                         page_num, len(new_products), len(all_listing_products))
-            else:
-                stale_page_count += 1
-                log.info("Page %d: no new products (stale count: %d)", page_num, stale_page_count)
-                if stale_page_count >= 3:
-                    log.info("Stopping pagination: 3 consecutive pages with no new products")
-                    break
-
+            # Load first page and detect total page count
+            log.info("Loading %s", TARGET_URL)
             emit_progress(
                 phase="collect",
                 phase_label="Collecting catalog pages",
-                phase_current=min(page_num, max(1, total_pages)),
+                phase_current=0,
+                phase_total=1,
+                current_message="Opening product catalog...",
+            )
+            try_goto(page, TARGET_URL)
+
+            # Scroll down to trigger lazy loading and load pagination
+            for _ in range(5):
+                page.mouse.wheel(0, 3000)
+                time.sleep(0.6)
+
+            total_pages = _get_total_pages(page)
+            log.info("Detected %d total pages", total_pages)
+
+            # Collect products from page 1
+            page1_products = collect_dom_listing(page, TARGET_URL)
+            all_listing_products.extend(page1_products)
+            log.info("Page 1: collected %d products from DOM", len(page1_products))
+            emit_progress(
+                phase="collect",
+                phase_label="Collecting catalog pages",
+                phase_current=1,
                 phase_total=max(1, total_pages),
                 collected_dom=len(all_listing_products),
                 discovered_api=len(discovered_products),
                 endpoint_count=len(endpoint_urls),
-                current_message=f"Collected page {min(page_num, max(1, total_pages))}/{max(1, total_pages)}",
+                current_message=f"Collected page 1/{max(1, total_pages)}",
             )
 
-            time.sleep(random.uniform(0.3, 0.8))
+            # Navigate through remaining pages by CLICKING pagination buttons
+            # (the site is a SPA — URL navigation doesn't change displayed products)
+            global_seen_ids: Set[str] = {p.get("product_id", "") for p in page1_products}
+            stale_page_count = 0
+            for page_num in range(2, total_pages + 1):
+                if limit > 0 and len(all_listing_products) >= limit:
+                    break
 
-        browser.close()
+                log.info("Clicking to page %d/%d", page_num, total_pages)
+                if not _click_next_page(page, page_num):
+                    log.warning("Could not click to page %d — trying URL fallback", page_num)
+                    # Fallback: try URL navigation
+                    page_url = f"{TARGET_URL}?page={page_num}"
+                    try:
+                        try_goto(page, page_url, retries=2)
+                        for _ in range(3):
+                            page.mouse.wheel(0, 3000)
+                            time.sleep(0.4)
+                    except Exception as exc:
+                        log.warning("URL fallback also failed for page %d: %s", page_num, exc)
+                        continue
+
+                # Scroll to ensure all lazy content loads
+                for _ in range(3):
+                    page.mouse.wheel(0, 2000)
+                    time.sleep(0.3)
+
+                page_products = collect_dom_listing(page, TARGET_URL)
+                # Filter out products we already have (dedup across pages)
+                new_products = [
+                    p for p in page_products
+                    if p.get("product_id", "") not in global_seen_ids
+                ]
+                if new_products:
+                    all_listing_products.extend(new_products)
+                    global_seen_ids.update(p.get("product_id", "") for p in new_products)
+                    stale_page_count = 0
+                    log.info("Page %d: collected %d new products (total DOM: %d)",
+                             page_num, len(new_products), len(all_listing_products))
+                else:
+                    stale_page_count += 1
+                    log.info("Page %d: no new products (stale count: %d)", page_num, stale_page_count)
+                    if stale_page_count >= 3:
+                        log.info("Stopping pagination: 3 consecutive pages with no new products")
+                        break
+
+                emit_progress(
+                    phase="collect",
+                    phase_label="Collecting catalog pages",
+                    phase_current=min(page_num, max(1, total_pages)),
+                    phase_total=max(1, total_pages),
+                    collected_dom=len(all_listing_products),
+                    discovered_api=len(discovered_products),
+                    endpoint_count=len(endpoint_urls),
+                    current_message=f"Collected page {min(page_num, max(1, total_pages))}/{max(1, total_pages)}",
+                )
+
+                time.sleep(random.uniform(0.3, 0.8))
+
+            browser.close()
+    except Exception as exc:
+        hint = _format_runtime_hint(exc)
+        if hint:
+            log.error("Scraper startup/runtime failure: %s | %s", exc, hint)
+            raise RuntimeError(f"{exc} | Hint: {hint}") from exc
+        raise
 
     log.info(
         "DOM listing: %d products | API discovery: %d products | %d endpoints",
@@ -806,58 +856,65 @@ def run_scraper(
             processed_products=len(normalized_rows),
             current_message=f"Enriching {len(products_needing_detail)} products...",
         )
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless, slow_mo=slowmo)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/122.0.0.0 Safari/537.36"
-            )
-            detail_page = context.new_page()
-            count = 0
-            for product in products_needing_detail:
-                detailed = scrape_product_detail(detail_page, product)
-                if detailed:
-                    # Update the existing row in-place
-                    for i, row in enumerate(normalized_rows):
-                        if row["product_id"] == detailed["product_id"]:
-                            normalized_rows[i] = detailed
-                            break
-                count += 1
-                if detailed:
-                    emit_progress(
-                        phase="enrich",
-                        phase_label="Enriching product details",
-                        phase_current=count,
-                        phase_total=len(products_needing_detail),
-                        processed_products=len(normalized_rows),
-                        current_message=f"Enriched {detailed.get('name', 'product')}",
-                        product={
-                            "name": detailed.get("name", ""),
-                            "unit": detailed.get("unit", ""),
-                            "price": detailed.get("price"),
-                        },
-                    )
-                elif count % 20 == 0:
-                    emit_progress(
-                        phase="enrich",
-                        phase_label="Enriching product details",
-                        phase_current=count,
-                        phase_total=len(products_needing_detail),
-                        processed_products=len(normalized_rows),
-                        current_message=f"Enriched {count}/{len(products_needing_detail)} detail pages",
-                    )
-                if count % 20 == 0:
-                    log.info("Detail scrape progress: %d/%d", count, len(products_needing_detail))
-                    # Incremental save
-                    merged = list(existing.values()) + normalized_rows
-                    merged_dedup = {}
-                    for row in merged:
-                        k = str(row.get("product_id") or "") or str(row.get("url") or "")
-                        if k:
-                            merged_dedup[k] = row
-                    write_products(output, list(merged_dedup.values()))
-            browser.close()
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=headless, slow_mo=slowmo)
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/122.0.0.0 Safari/537.36"
+                )
+                detail_page = context.new_page()
+                count = 0
+                for product in products_needing_detail:
+                    detailed = scrape_product_detail(detail_page, product)
+                    if detailed:
+                        # Update the existing row in-place
+                        for i, row in enumerate(normalized_rows):
+                            if row["product_id"] == detailed["product_id"]:
+                                normalized_rows[i] = detailed
+                                break
+                    count += 1
+                    if detailed:
+                        emit_progress(
+                            phase="enrich",
+                            phase_label="Enriching product details",
+                            phase_current=count,
+                            phase_total=len(products_needing_detail),
+                            processed_products=len(normalized_rows),
+                            current_message=f"Enriched {detailed.get('name', 'product')}",
+                            product={
+                                "name": detailed.get("name", ""),
+                                "unit": detailed.get("unit", ""),
+                                "price": detailed.get("price"),
+                            },
+                        )
+                    elif count % 20 == 0:
+                        emit_progress(
+                            phase="enrich",
+                            phase_label="Enriching product details",
+                            phase_current=count,
+                            phase_total=len(products_needing_detail),
+                            processed_products=len(normalized_rows),
+                            current_message=f"Enriched {count}/{len(products_needing_detail)} detail pages",
+                        )
+                    if count % 20 == 0:
+                        log.info("Detail scrape progress: %d/%d", count, len(products_needing_detail))
+                        # Incremental save
+                        merged = list(existing.values()) + normalized_rows
+                        merged_dedup = {}
+                        for row in merged:
+                            k = str(row.get("product_id") or "") or str(row.get("url") or "")
+                            if k:
+                                merged_dedup[k] = row
+                        write_products(output, list(merged_dedup.values()))
+                browser.close()
+        except Exception as exc:
+            hint = _format_runtime_hint(exc)
+            if hint:
+                log.warning("Detail enrichment failed: %s | %s", exc, hint)
+            else:
+                log.warning("Detail enrichment failed: %s", exc)
     else:
         emit_progress(
             phase="enrich",
